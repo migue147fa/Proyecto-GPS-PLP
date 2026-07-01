@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GeoAlert</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { margin:0; height:100%; font-family: Arial, sans-serif; background:#0f172a; }
+    #map { height: 66vh; width: 100%; }
+    .panel { padding: 12px 14px; color:white; background:#0f172a; }
+    .title { font-size: 24px; font-weight:800; margin-bottom:8px; }
+    .status { padding: 12px; border-radius: 12px; margin: 8px 0; font-size: 17px; font-weight:800; text-align:center; }
+    .out { background:#14532d; }
+    .machine { background:#1e3a8a; animation: pulse 1s infinite; }
+    .person { background:#7f1d1d; animation: pulse 1s infinite; }
+    button { width:100%; padding:13px; border:0; border-radius:12px; margin:5px 0; font-size:15px; font-weight:800; color:#0f172a; }
+    .gps { background:#38bdf8; }
+    .inside { background:#60a5fa; }
+    .outside { background:#22c55e; }
+    .legend { margin-top:8px; padding:10px; border-radius:12px; background:#111827; font-size:13px; line-height:1.45; }
+    .box { display:inline-block; width:16px; height:10px; border:2px solid; margin-right:7px; vertical-align:middle; }
+    .blue { border-color:#2563eb; background:rgba(37,99,235,.25); }
+    .red { border-color:#ef4444; background:rgba(239,68,68,.22); }
+    .small { font-size: 12px; color:#cbd5e1; line-height:1.4; text-align:center; margin-top:8px; }
+    @keyframes pulse { 0%{opacity:1} 50%{opacity:.65} 100%{opacity:1} }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="panel">
+    <div class="title">GeoAlert</div>
+    <div id="status" class="status out">✅ ESTADO: FUERA DE ZONA</div>
+    <button class="gps" onclick="usarGPS()">📍 Usar GPS del celular</button>
+    <button class="inside" onclick="probarDentro()">🔵 Probar dentro: maquinarias</button>
+    <button class="outside" onclick="probarFuera()">✅ Probar fuera</button>
+    <div class="legend">
+      <div><span class="box blue"></span><b>Radio de maquinarias</b> — zona interior</div>
+      <div><span class="box red"></span><b>Radio de voladura de personal</b> — offset aproximado 250 m</div>
+    </div>
+    <div class="small" style="font-weight:700;">App desarrollada por PLP, Jul2026</div>
+  </div>
+
+<script>
+  const blueCoords = [
+    [-16.530050, -71.583700],
+    [-16.530400, -71.581650],
+    [-16.531700, -71.580750],
+    [-16.533100, -71.581550],
+    [-16.533450, -71.583450],
+    [-16.532200, -71.584550],
+    [-16.530800, -71.584450]
+  ];
+
+  // Polígono rojo calculado como offset aproximado de 250 m hacia afuera desde el polígono azul.
+  const redCoords = [
+    [-16.528049, -71.584792],
+    [-16.528680, -71.580129],
+    [-16.531700, -71.578407],
+    [-16.534813, -71.580020],
+    [-16.535579, -71.584241],
+    [-16.532842, -71.586796],
+    [-16.529687, -71.586490]
+  ];
+
+  const map = L.map('map').setView([-16.5317, -71.5828], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  const redPolygon = L.polygon(redCoords, {
+    color: '#ef4444', weight: 3, fillColor: '#ef4444', fillOpacity: 0.22
+  }).addTo(map).bindPopup('Radio de voladura de personal: offset aprox. 250 m');
+
+  const bluePolygon = L.polygon(blueCoords, {
+    color: '#2563eb', weight: 3, fillColor: '#2563eb', fillOpacity: 0.35
+  }).addTo(map).bindPopup('Radio de maquinarias: zona interior');
+
+  let marker = L.marker([-16.5378, -71.5900]).addTo(map).bindPopup('Tu ubicación demo').openPopup();
+  map.fitBounds(redPolygon.getBounds(), { padding: [20,20] });
+
+  function pointInPolygon(point, vs) {
+    const x = point[1], y = point[0];
+    let inside = false;
+    for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) {
+      const xi = vs[i][1], yi = vs[i][0];
+      const xj = vs[j][1], yj = vs[j][0];
+      const intersect = ((yi > y) !== (yj > y)) &&
+        (x < (xj - xi) * (y - yi) / ((yj - yi) || 0.0000001) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function beep() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.value = 0.28;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      setTimeout(() => { osc.stop(); ctx.close(); }, 600);
+    } catch (e) {}
+    if (navigator.vibrate) navigator.vibrate([450, 180, 450]);
+  }
+
+  function actualizar(lat, lng) {
+    marker.setLatLng([lat, lng]);
+    map.setView([lat, lng], 16);
+    const inBlue = pointInPolygon([lat, lng], blueCoords);
+    const inRed = pointInPolygon([lat, lng], redCoords);
+    const status = document.getElementById('status');
+
+    if (inBlue) {
+      status.className = 'status machine';
+      status.textContent = '🔵 ALERTA: DENTRO DEL RADIO DE MAQUINARIAS';
+      beep();
+      alert('🔵 ALERTA: Estás dentro del radio de maquinarias');
+    } else if (inRed) {
+      status.className = 'status person';
+      status.textContent = '🚨 ALERTA: DENTRO DEL RADIO DE PERSONAL';
+      beep();
+      alert('🚨 ALERTA: Estás dentro del radio de voladura de personal');
+    } else {
+      status.className = 'status out';
+      status.textContent = '✅ ESTADO: FUERA DE ZONA';
+    }
+  }
+
+  function probarDentro() { actualizar(-16.5317, -71.5828); }
+  function probarFuera() { actualizar(-16.5378, -71.5900); }
+
+  function usarGPS() {
+    if (!navigator.geolocation) {
+      alert('Este navegador no soporta GPS.');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      pos => actualizar(pos.coords.latitude, pos.coords.longitude),
+      err => alert('No se pudo usar el GPS. Posible causa: archivo local sin HTTPS o permiso bloqueado.'),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  }
+</script>
+</body>
+</html>
