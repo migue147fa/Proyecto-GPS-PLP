@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0">
+  <title>GeoAlert - PLP</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html,body{height:100%;margin:0;font-family:Arial,sans-serif;background:#071018}
+    #map{height:100vh;width:100vw}
+    .topbar{position:absolute;top:0;left:0;right:0;z-index:1000;background:rgba(0,0,0,.88);color:#fff;padding:14px 16px;font-size:22px;font-weight:bold}
+    .panel{position:absolute;top:66px;left:12px;right:12px;z-index:1000;background:rgba(5,10,15,.9);color:white;border-radius:14px;padding:13px;box-shadow:0 2px 12px #0009}
+    .estado{font-size:18px;font-weight:bold;margin-bottom:5px}
+    .ok{color:#45d96b}.warn{color:#ffd43b}.danger{color:#ff4d4d}
+    .small{font-size:13px;color:#ddd;margin-top:4px}
+    .buttons{position:absolute;bottom:72px;left:10px;right:10px;z-index:1000;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+    button{border:0;border-radius:12px;padding:13px 8px;color:white;font-weight:bold;font-size:13px;box-shadow:0 2px 8px #0008}
+    .gps{background:#17a34a}.inside{background:#1976d2}.outside{background:#c62828}
+    .legend{position:absolute;left:12px;bottom:138px;z-index:1000;background:rgba(5,10,15,.88);color:white;border-radius:12px;padding:10px;font-size:13px;line-height:1.45}
+    .box{display:inline-block;width:18px;height:10px;margin-right:6px;border:2px solid}
+    .blue{border-color:#1e88ff;background:rgba(30,136,255,.25)}
+    .red{border-color:#ff3333;background:rgba(255,51,51,.16)}
+    .footer{position:absolute;bottom:10px;left:12px;right:12px;z-index:1000;background:rgba(5,10,15,.88);color:white;border-radius:12px;padding:11px;text-align:center;font-size:14px}
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<div class="topbar">🛡️ GeoAlert - Vista Satelital</div>
+<div class="panel">
+  <div id="estado" class="estado ok">FUERA DE ZONA</div>
+  <div id="detalle">Presiona “Usar GPS” para iniciar seguimiento.</div>
+  <div id="distancia" class="small">Distancia a zona azul: -- m</div>
+  <div id="coords" class="small"></div>
+</div>
+<div class="legend">
+  <b>Leyenda</b><br>
+  <span class="box blue"></span> Zona azul: maquinarias<br>
+  <span class="box red"></span> Zona roja: personal / offset
+</div>
+<div class="buttons">
+  <button class="gps" onclick="usarGPS()">USAR GPS</button>
+  <button class="inside" onclick="probarDentro()">PROBAR DENTRO</button>
+  <button class="outside" onclick="probarFuera()">PROBAR FUERA</button>
+</div>
+<div class="footer">App desarrollada por PLP, Jul2026</div>
+
+<script>
+  const miPosicion = [-16.5476108, -71.6026010];
+  const centroAzul = [-16.5476108, -71.6024140]; // aprox. 20 m al este
+
+  const map = L.map('map').setView(miPosicion, 18);
+
+  // Capa satelital tipo Google Maps, usando Esri World Imagery
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{
+    maxZoom:20,
+    attribution:'Tiles © Esri'
+  }).addTo(map);
+
+  const maquinaria = [
+    [-16.547770, -71.602575],
+    [-16.547450, -71.602575],
+    [-16.547450, -71.602253],
+    [-16.547770, -71.602253]
+  ];
+
+  const personal = [
+    [-16.549980, -71.604760],
+    [-16.545240, -71.604760],
+    [-16.545240, -71.600070],
+    [-16.549980, -71.600070]
+  ];
+
+  L.polygon(personal,{color:'#ff3333',weight:3,fillColor:'#ff3333',fillOpacity:.15}).addTo(map);
+  L.polygon(maquinaria,{color:'#1e88ff',weight:4,fillColor:'#1e88ff',fillOpacity:.30}).addTo(map);
+  L.marker(miPosicion).addTo(map).bindPopup("Tu posición de referencia").openPopup();
+
+  let marker = null;
+  let alarmaZona = "";
+
+  function puntoEnPoligono(point, polygon){
+    const x = point[1], y = point[0];
+    let dentro = false;
+    for(let i=0,j=polygon.length-1;i<polygon.length;j=i++){
+      const xi=polygon[i][1], yi=polygon[i][0];
+      const xj=polygon[j][1], yj=polygon[j][0];
+      const intersecta=((yi>y)!=(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi);
+      if(intersecta) dentro=!dentro;
+    }
+    return dentro;
+  }
+
+  function distanciaMetros(a,b){
+    const R=6371000;
+    const lat1=a[0]*Math.PI/180, lat2=b[0]*Math.PI/180;
+    const dlat=(b[0]-a[0])*Math.PI/180;
+    const dlon=(b[1]-a[1])*Math.PI/180;
+    const h=Math.sin(dlat/2)**2 + Math.cos(lat1)*Math.cos(lat2)*Math.sin(dlon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(h));
+  }
+
+  function alarma(tipo){
+    if(alarmaZona === tipo) return;
+    alarmaZona = tipo;
+    try{
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type="sine";
+      osc.frequency.value = tipo==="azul" ? 1100 : 760;
+      gain.gain.value=.20;
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start();
+      setTimeout(()=>{osc.stop();ctx.close();}, tipo==="azul" ? 1100 : 650);
+    }catch(e){}
+    if(navigator.vibrate){
+      if(tipo==="azul") navigator.vibrate([500,150,500,150,500]);
+      else navigator.vibrate([300,150,300]);
+    }
+  }
+
+  function actualizar(lat,lon){
+    const p=[lat,lon];
+    if(marker) map.removeLayer(marker);
+    marker=L.circleMarker(p,{radius:9,color:'#fff',weight:3,fillColor:'#2196f3',fillOpacity:1}).addTo(map);
+    map.setView(p,18);
+
+    const dentroAzul = puntoEnPoligono(p, maquinaria);
+    const dentroRojo = puntoEnPoligono(p, personal);
+    const dist = distanciaMetros(p, centroAzul);
+
+    document.getElementById("coords").innerHTML = "Lat: "+lat.toFixed(7)+" | Lon: "+lon.toFixed(7);
+    document.getElementById("distancia").innerHTML = "Distancia al centro de zona azul: "+Math.round(dist)+" m";
+
+    if(dentroAzul){
+      document.getElementById("estado").className="estado danger";
+      document.getElementById("estado").innerHTML="PELIGRO - RADIO DE MAQUINARIAS";
+      document.getElementById("detalle").innerHTML="Estás dentro de la zona azul. Retírate del área.";
+      alarma("azul");
+    }else if(dentroRojo){
+      document.getElementById("estado").className="estado warn";
+      document.getElementById("estado").innerHTML="INGRESANDO A RADIO DE PERSONAL";
+      document.getElementById("detalle").innerHTML="Estás dentro del radio rojo de seguridad.";
+      alarma("rojo");
+    }else{
+      document.getElementById("estado").className="estado ok";
+      document.getElementById("estado").innerHTML="FUERA DE ZONA";
+      document.getElementById("detalle").innerHTML="Estás fuera de las zonas de seguridad.";
+      alarmaZona="";
+    }
+  }
+
+  function usarGPS(){
+    if(!navigator.geolocation){ alert("Tu navegador no soporta GPS."); return; }
+    navigator.geolocation.watchPosition(
+      pos => actualizar(pos.coords.latitude,pos.coords.longitude),
+      err => alert("No se pudo obtener GPS. Revisa permisos y que estés usando HTTPS."),
+      {enableHighAccuracy:true, maximumAge:0, timeout:10000}
+    );
+  }
+
+  function probarDentro(){ actualizar(centroAzul[0], centroAzul[1]); }
+  function probarFuera(){ actualizar(miPosicion[0], miPosicion[1]); }
+
+  map.fitBounds(L.latLngBounds([miPosicion, centroAzul]).pad(0.8));
+</script>
+</body>
+</html>
